@@ -23,7 +23,7 @@ class ChatRequest(BaseModel):
     max_tokens: int = 256
     temperature: float = 0.7
 
-@app.post("/api/chat")
+@app.post("/api")
 async def chat_endpoint(request: ChatRequest):
     try:
         # Prepare messages for Ollama

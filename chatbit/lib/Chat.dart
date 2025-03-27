@@ -1,5 +1,37 @@
 import 'package:flutter/material.dart';
+import 'dart:convert';
 import 'package:flutter_animate/flutter_animate.dart';
+import 'package:http/http.dart' as http;
+
+void main() {
+  runApp(const MyApp());
+}
+
+class MyApp extends StatelessWidget {
+  const MyApp({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return MaterialApp(
+      title: 'AI Chatbot',
+      theme: ThemeData(
+        colorScheme: ColorScheme.fromSeed(
+          seedColor: Colors.blue,
+          brightness: Brightness.light,
+        ),
+        useMaterial3: true,
+      ),
+      darkTheme: ThemeData(
+        colorScheme: ColorScheme.fromSeed(
+          seedColor: Colors.blue,
+          brightness: Brightness.dark,
+        ),
+        useMaterial3: true,
+      ),
+      home: const ChatScreen(),
+    );
+  }
+}
 
 class ChatScreen extends StatefulWidget {
   const ChatScreen({super.key});
@@ -11,51 +43,89 @@ class ChatScreen extends StatefulWidget {
 class _ChatScreenState extends State<ChatScreen> {
   final TextEditingController _messageController = TextEditingController();
   final List<ChatMessage> _messages = [];
-  bool _isResponding = false;
+  bool _isLoading = false;
   final ScrollController _scrollController = ScrollController();
+  final String _apiUrl = "http://10.0.2.2:8000"; // Use your server URL
 
-  void _sendMessage(String text) async {
-    if (text.isEmpty) return;
+  @override
+  void initState() {
+    super.initState();
+    _addWelcomeMessage();
+  }
 
+  void _addWelcomeMessage() {
     setState(() {
       _messages.add(ChatMessage(
-        text: text,
-        isUser: true,
-        timestamp: DateTime.now(),
+        text: "Hello! I'm your AI assistant. How can I help you today?",
+        isUser: false,
       ));
-      _isResponding = true;
+    });
+    _scrollToBottom();
+  }
+
+  Future<void> _sendMessage() async {
+    if (_messageController.text.isEmpty) return;
+
+    final message = _messageController.text;
+    setState(() {
+      _messages.add(ChatMessage(
+        text: message,
+        isUser: true,
+      ));
+      _isLoading = true;
       _messageController.clear();
     });
 
-    // Scroll to bottom when new message arrives
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      _scrollController.animateTo(
-        _scrollController.position.maxScrollExtent,
-        duration: const Duration(milliseconds: 300),
-        curve: Curves.easeOut,
-      );
-    });
+    _scrollToBottom();
 
-    // Simulate LLM response (replace with actual API call)
-    await Future.delayed(const Duration(seconds: 1));
-    
-    setState(() {
-      _messages.add(ChatMessage(
-        text: "Thanks for your message! This is a simulated response from the AI. "
-            "In a real app, you would connect this to an LLM API.",
-        isUser: false,
-        timestamp: DateTime.now(),
-      ));
-      _isResponding = false;
-    });
-
-    // Scroll to bottom after response
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      _scrollController.animateTo(
-        _scrollController.position.maxScrollExtent,
-        duration: const Duration(milliseconds: 300),
-        curve: Curves.easeOut,
+    try {
+      final response = await http.post(
+        Uri.parse('$_apiUrl/api'),
+        headers: {'Content-Type': 'application/json'},
+        body: json.encode({
+          'messages': _messages.map((msg) => {
+            'text': msg.text,
+            'is_user': msg.isUser,
+          }).toList(),
+          'max_tokens': 256,
+          'temperature': 0.7,
+        }),
       );
+
+      if (response.statusCode == 200) {
+        final data = json.decode(response.body);
+        setState(() {
+          _messages.add(ChatMessage(
+            text: data['response'],
+            isUser: false,
+          ));
+        });
+      } else {
+        throw Exception('Failed to get response: ${response.statusCode}');
+      }
+    } catch (e) {
+      setState(() {
+        _messages.add(ChatMessage(
+          text: "Sorry, I encountered an error. Please try again.",
+          isUser: false,
+        ));
+      });
+      debugPrint('Error: $e');
+    } finally {
+      setState(() => _isLoading = false);
+      _scrollToBottom();
+    }
+  }
+
+  void _scrollToBottom() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (_scrollController.hasClients) {
+        _scrollController.animateTo(
+          _scrollController.position.maxScrollExtent,
+          duration: 300.ms,
+          curve: Curves.easeOut,
+        );
+      }
     });
   }
 
@@ -74,9 +144,12 @@ class _ChatScreenState extends State<ChatScreen> {
         centerTitle: true,
         actions: [
           IconButton(
-            icon: const Icon(Icons.settings),
+            icon: const Icon(Icons.refresh),
             onPressed: () {
-              // Add settings functionality
+              setState(() {
+                _messages.clear();
+                _addWelcomeMessage();
+              });
             },
           ),
         ],
@@ -87,8 +160,7 @@ class _ChatScreenState extends State<ChatScreen> {
             child: ListView.builder(
               controller: _scrollController,
               padding: const EdgeInsets.all(16),
-              reverse: false,
-              itemCount: _messages.length + (_isResponding ? 1 : 0),
+              itemCount: _messages.length + (_isLoading ? 1 : 0),
               itemBuilder: (context, index) {
                 if (index < _messages.length) {
                   return _MessageBubble(
@@ -102,7 +174,7 @@ class _ChatScreenState extends State<ChatScreen> {
           _InputField(
             controller: _messageController,
             onSend: _sendMessage,
-            isResponding: _isResponding,
+            isLoading: _isLoading,
           ),
         ],
       ),
@@ -113,12 +185,11 @@ class _ChatScreenState extends State<ChatScreen> {
 class ChatMessage {
   final String text;
   final bool isUser;
-  final DateTime timestamp;
+  final DateTime timestamp = DateTime.now();
 
-  const ChatMessage({
+   ChatMessage({
     required this.text,
     required this.isUser,
-    required this.timestamp,
   });
 }
 
@@ -210,13 +281,13 @@ class _TypingIndicator extends StatelessWidget {
 
 class _InputField extends StatelessWidget {
   final TextEditingController controller;
-  final Function(String) onSend;
-  final bool isResponding;
+  final VoidCallback onSend;
+  final bool isLoading;
 
   const _InputField({
     required this.controller,
     required this.onSend,
-    required this.isResponding,
+    required this.isLoading,
   });
 
   @override
@@ -251,14 +322,12 @@ class _InputField extends StatelessWidget {
                     vertical: 16,
                   ),
                 ),
-                onSubmitted: isResponding ? null : onSend,
+                onSubmitted: (_) => onSend(),
               ),
             ),
             IconButton(
               icon: const Icon(Icons.send),
-              onPressed: isResponding
-                  ? null
-                  : () => onSend(controller.text.trim()),
+              onPressed: isLoading ? null : onSend,
             ),
           ],
         ),
